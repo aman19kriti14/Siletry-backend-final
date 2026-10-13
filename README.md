@@ -36,6 +36,38 @@ Turn seeding off with `SEED_DEMO=false`.
    ```
 4. Deploy. Health check: `GET /actuator/health`.
 
+## Demo leads from siletry.com
+
+The "Book a demo" form on the website posts to `POST /api/public/leads`. Each lead is saved in the
+`leads` table first, then a WhatsApp alert goes to the team from Siletry's own number (`META_ADMIN_*`).
+If sending fails, a background job retries with backoff (1, 2, 4… minutes, up to 6 attempts), and a
+lead is never alerted twice.
+
+Protection on the public endpoint: validation with readable errors, a honeypot field, a per-visitor
+rate limit (5 per 10 minutes), and duplicate merging (same number within 24 hours bumps a counter
+instead of creating a row and re-alerting). Visitor IPs are stored only as salted SHA-256 hashes.
+
+Variables (backend service):
+```
+ALLOWED_ORIGINS=...,https://siletry.com,https://www.siletry.com
+OPS_ALERT_TO=918228968530                # who gets alerts; comma-separated for several people
+OPS_ALERT_MODE=text                      # or "template" once siletry_staff_alert is approved
+OPS_API_KEY=<random string, 24+ chars>   # for the ops endpoints below
+LEADS_IP_SALT=<random string>
+```
+
+`text` mode only reaches you if you've messaged Siletry's number in the last 24 hours (Meta accepts the
+message either way and reports the failure later through the webhook). `template` mode uses the
+`siletry_staff_alert` template from META_SETUP.md and arrives any time.
+
+Ops endpoints (header `X-Ops-Key: $OPS_API_KEY`):
+```
+GET   /api/ops/leads?status=NEW&page=0&size=50
+PATCH /api/ops/leads/{id}          {"status":"CONTACTED","note":"Demo on Friday"}
+POST  /api/ops/leads/{id}/notify   re-send the alert
+```
+Statuses: NEW, CONTACTED, DEMO_SCHEDULED, CONVERTED, NOT_INTERESTED, SPAM.
+
 ## Before the first real clinic
 
 - **Switch to Flyway.** `ddl-auto=update` only adds tables and columns. It never renames, drops or migrates data. Generate a baseline from the current schema, add Flyway, set `ddl-auto=validate`.

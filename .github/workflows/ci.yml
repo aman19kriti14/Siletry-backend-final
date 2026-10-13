@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: siletry
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGDATABASE: siletry
+      PGUSER: postgres
+      PGPASSWORD: postgres
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Build and run tests
+        run: |
+          set -o pipefail
+          mvn -B -ntp verify 2>&1 | tee build.log
+
+      - name: Report failures
+        if: failure()
+        run: |
+          {
+            echo "### Build errors"
+            grep -E '^\[ERROR\]' build.log | grep -v -E 'Help 1|re-run|full stack|For more information|^\[ERROR\] *$|-> \[Help|WebMergedContextConfiguration' | cut -c1-300 | head -30
+            echo "### Root causes"
+            grep -h -E 'Caused by:|APPLICATION FAILED TO START|^Description:|^Action:' -A3 build.log target/surefire-reports/*.xml 2>/dev/null | cut -c1-400 | awk '!seen[$0]++' | tail -40
+            for f in target/surefire-reports/*.txt; do
+              [ -f "$f" ] || continue
+              if grep -qE 'FAILURE|ERROR' "$f"; then echo "### $(basename "$f")"; head -60 "$f"; fi
+            done
+          } > failures.txt || true
+          # One annotation with everything, readable from the Checks API
+          msg=$(head -c 60000 failures.txt | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+          echo "::error title=Build or test failures::${msg}"
+          cat failures.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: target/surefire-reports
+          if-no-files-found: ignore
+          retention-days: 7
