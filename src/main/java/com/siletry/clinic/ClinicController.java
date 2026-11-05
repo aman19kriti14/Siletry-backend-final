@@ -27,7 +27,7 @@ public class ClinicController {
                              boolean delayAnnouncementsEnabled, boolean googleReviewsEnabled,
                              String clinicType, String landmark, List<String> replyLanguages, boolean live,
                              boolean apiConnected, String verifiedName, String phoneNumberId, String businessAccountId,
-                             java.time.LocalDateTime apiConnectedAt) {
+                             java.time.LocalDateTime apiConnectedAt, String provider) {
         static ClinicView of(Clinic c) {
             return new ClinicView(c.getId(), c.getName(), c.getArea(), c.getCity(), c.getAddress(),
                     Phone.pretty(c.getPhone()), Phone.pretty(c.getWhatsappNumber()), c.isWhatsappConnected(),
@@ -36,7 +36,7 @@ public class ClinicController {
                     c.getGoogleReviewLink(), c.delayAnnouncementsOn(), c.googleReviewsOn(),
                     c.getClinicType(), c.getLandmark(), c.replyLanguageList(), c.isLive(),
                     c.hasWhatsAppApi(), c.getWaVerifiedName(), c.getWaPhoneNumberId(), c.getWaBusinessAccountId(),
-                    c.getWaConnectedAt());
+                    c.getWaConnectedAt(), !c.hasWhatsAppApi() ? null : c.isGupshup() ? "gupshup" : "meta");
         }
     }
 
