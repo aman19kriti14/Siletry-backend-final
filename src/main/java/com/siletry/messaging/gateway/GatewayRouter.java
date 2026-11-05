@@ -11,9 +11,11 @@ import java.util.function.Supplier;
 
 /**
  * Chooses how each message goes out:
- * - clinic connected to the Cloud API -> Meta (real)
+ * - clinic connected through a Gupshup app -> Gupshup (real)
+ * - clinic connected to the Cloud API directly -> Meta (real)
  * - clinic not connected, or anything inside the simulator -> mock
- * - Siletry's own number (doctor alerts, login codes) -> Meta when META_ADMIN_* is set, else mock
+ * - Siletry's own number (doctor alerts, login codes): Gupshup when GUPSHUP_ADMIN_* is set,
+ *   else Meta when META_ADMIN_* is set, else mock
  */
 @Component
 public class GatewayRouter {
@@ -22,17 +24,37 @@ public class GatewayRouter {
 
     private final MockWhatsAppGateway mock;
     private final MetaCloudApiGateway meta;
+    private final GupshupGateway gupshup;
     private final CredentialCipher cipher;
     private final WaAccount admin;
+    private final WhatsAppGateway adminReal;
+    /** Gupshup app ID of Siletry's own number, when it runs on Gupshup. */
+    private final String adminGupshupAppId;
 
-    public GatewayRouter(MockWhatsAppGateway mock, MetaCloudApiGateway meta, CredentialCipher cipher,
+    public GatewayRouter(MockWhatsAppGateway mock, MetaCloudApiGateway meta, GupshupGateway gupshup, CredentialCipher cipher,
                          @Value("${siletry.meta.admin-phone-number-id}") String adminId,
                          @Value("${siletry.meta.admin-access-token}") String adminToken,
-                         @Value("${siletry.meta.admin-display-number}") String adminDisplay) {
+                         @Value("${siletry.meta.admin-display-number}") String adminDisplay,
+                         @Value("${siletry.gupshup.admin-app-id}") String gsAdminAppId,
+                         @Value("${siletry.gupshup.admin-app-token}") String gsAdminToken,
+                         @Value("${siletry.gupshup.admin-display-number}") String gsAdminDisplay) {
         this.mock = mock;
         this.meta = meta;
+        this.gupshup = gupshup;
         this.cipher = cipher;
-        this.admin = adminId.isBlank() || adminToken.isBlank() ? null : new WaAccount(adminId, adminToken, Phone.normalize(adminDisplay));
+        if (!gsAdminAppId.isBlank() && !gsAdminToken.isBlank()) {
+            this.admin = new WaAccount(gsAdminAppId.trim(), gsAdminToken.trim(), Phone.normalize(gsAdminDisplay));
+            this.adminReal = gupshup;
+            this.adminGupshupAppId = gsAdminAppId.trim();
+        } else if (!adminId.isBlank() && !adminToken.isBlank()) {
+            this.admin = new WaAccount(adminId, adminToken, Phone.normalize(adminDisplay));
+            this.adminReal = meta;
+            this.adminGupshupAppId = null;
+        } else {
+            this.admin = null;
+            this.adminReal = null;
+            this.adminGupshupAppId = null;
+        }
     }
 
     /** Runs work where every message is mocked, even for connected clinics (the simulator). */
@@ -51,20 +73,28 @@ public class GatewayRouter {
     }
 
     public WhatsAppGateway forClinic(Clinic c) {
-        return !SIMULATING.get() && c.hasWhatsAppApi() ? meta : mock;
+        if (SIMULATING.get() || !c.hasWhatsAppApi()) return mock;
+        return c.isGupshup() ? gupshup : meta;
     }
 
+    /** For Gupshup clinics phoneNumberId carries the Gupshup app ID (that's what its send API addresses). */
     public WaAccount accountFor(Clinic c) {
         if (!c.hasWhatsAppApi()) return new WaAccount(null, null, c.getWhatsappNumber());
-        return new WaAccount(c.getWaPhoneNumberId(), cipher.decrypt(c.getWaAccessToken()), c.getWhatsappNumber());
+        String id = c.isGupshup() ? c.getGupshupAppId() : c.getWaPhoneNumberId();
+        return new WaAccount(id, cipher.decrypt(c.getWaAccessToken()), c.getWhatsappNumber());
     }
 
     public boolean isRealForClinic(Clinic c) {
-        return forClinic(c) == meta;
+        return forClinic(c) != mock;
     }
 
     public WhatsAppGateway adminGateway() {
-        return !SIMULATING.get() && admin != null ? meta : mock;
+        return !SIMULATING.get() && admin != null ? adminReal : mock;
+    }
+
+    /** Gupshup app ID of Siletry's own number, or null when it isn't on Gupshup. */
+    public String adminGupshupAppId() {
+        return adminGupshupAppId;
     }
 
     public WaAccount adminAccount() {
@@ -76,7 +106,8 @@ public class GatewayRouter {
         return admin != null;
     }
 
+    /** Meta phone number ID of Siletry's own number (only when it's on Meta directly). */
     public String adminPhoneNumberId() {
-        return admin == null ? null : admin.phoneNumberId();
+        return admin == null || adminGupshupAppId != null ? null : admin.phoneNumberId();
     }
 }

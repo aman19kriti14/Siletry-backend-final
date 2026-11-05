@@ -21,15 +21,19 @@ import java.util.List;
  *                                     {"plan":"TRIAL","trialDays":7} extend the trial from today
  *                                     {"plan":"PAUSED"}              stopped paying (bot goes quiet)
  *   POST /api/ops/clinics/{id}/message-cap {"cap":3000}
+ *   POST /api/ops/clinics/{id}/gupshup     {"appId":"...","whatsappNumber":"919845012345"}
+ *        optional "appToken" (else fetched with the partner login) and "phoneNumberId"
+ *   POST /api/ops/clinics/{id}/templates/sync  refresh template approval status
  */
 @RestController
 @RequestMapping("/api/ops/clinics")
 public class OpsClinicController {
 
-    public record ClinicRow(Long id, String name, String whatsappNumber, boolean whatsappConnected, boolean botEnabled,
-                            String plan, LocalDateTime trialEndsAt, int messageCap, LocalDateTime createdAt) {
+    public record ClinicRow(Long id, String name, String whatsappNumber, boolean whatsappConnected, String provider,
+                            boolean botEnabled, String plan, LocalDateTime trialEndsAt, int messageCap, LocalDateTime createdAt) {
         static ClinicRow of(Clinic c) {
-            return new ClinicRow(c.getId(), c.getName(), c.getWhatsappNumber(), c.hasWhatsAppApi(), c.isBotEnabled(),
+            String provider = !c.hasWhatsAppApi() ? "none" : c.isGupshup() ? "gupshup" : "meta";
+            return new ClinicRow(c.getId(), c.getName(), c.getWhatsappNumber(), c.hasWhatsAppApi(), provider, c.isBotEnabled(),
                     c.getPlan().name(), c.getTrialEndsAt(), c.getMessageCap(), c.getCreatedAt());
         }
     }
@@ -38,12 +42,37 @@ public class OpsClinicController {
 
     public record CapRequest(int cap) {}
 
+    public record GupshupRequest(String appId, String appToken, String whatsappNumber, String phoneNumberId) {}
+
     private final ClinicRepository clinics;
     private final OpsProperties props;
+    private final com.siletry.clinic.GupshupConnectService gupshup;
+    private final com.siletry.messaging.MetaTemplateService templates;
 
-    public OpsClinicController(ClinicRepository clinics, OpsProperties props) {
+    public OpsClinicController(ClinicRepository clinics, OpsProperties props,
+                               com.siletry.clinic.GupshupConnectService gupshup,
+                               com.siletry.messaging.MetaTemplateService templates) {
         this.clinics = clinics;
         this.props = props;
+        this.gupshup = gupshup;
+        this.templates = templates;
+    }
+
+    @PostMapping("/{id}/gupshup")
+    public com.siletry.clinic.GupshupConnectService.Result connectGupshup(
+            @RequestHeader(value = "X-Ops-Key", required = false) String key,
+            @PathVariable Long id, @RequestBody GupshupRequest req) {
+        authorize(key);
+        return gupshup.connect(id, req.appId(), req.appToken(), req.whatsappNumber(), req.phoneNumberId());
+    }
+
+    @PostMapping("/{id}/templates/sync")
+    @Transactional(noRollbackFor = {ApiException.class, com.siletry.messaging.gateway.MetaGraphClient.MetaApiException.class})
+    public com.siletry.messaging.MetaTemplateService.SyncResult syncTemplates(
+            @RequestHeader(value = "X-Ops-Key", required = false) String key, @PathVariable Long id) {
+        authorize(key);
+        Clinic c = clinics.findById(id).orElseThrow(() -> ApiException.notFound("Clinic"));
+        return templates.submitAll(c);
     }
 
     @GetMapping
