@@ -93,7 +93,7 @@ class ClinicFlowE2ETest {
         when(gupshupGateway.sendButtons(any(), anyString(), anyString(), anyList())).thenReturn(SendResult.ok("gs-" + UUID.randomUUID()));
         when(gupshupGateway.sendTemplate(any(), anyString(), any())).thenReturn(SendResult.ok("gs-" + UUID.randomUUID()));
 
-        String n = String.valueOf(System.nanoTime()).substring(4, 12);
+        String n = String.format("%08d", new java.util.Random().nextInt(100_000_000));
         auth.signup(new SignupRequest("E2E Clinic " + n, "Jayanagar", "Bengaluru", "Dr Owner",
                 "e2e" + n + "@example.com", "password123", "9180" + n, "9181" + n));
         clinic = clinics.findByWhatsappNumber("9181" + n).orElseThrow();
