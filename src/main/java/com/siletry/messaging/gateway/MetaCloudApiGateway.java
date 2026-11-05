@@ -30,13 +30,28 @@ public class MetaCloudApiGateway implements WhatsAppGateway {
 
     @Override
     public SendResult sendText(WaAccount from, String to, String body) {
-        Map<String, Object> msg = base(to, "text");
-        msg.put("text", Map.of("body", clip(body, 4096), "preview_url", false));
-        return send(from, msg);
+        return send(from, textMessage(to, body));
     }
 
     @Override
     public SendResult sendButtons(WaAccount from, String to, String body, List<String> buttons) {
+        return send(from, buttonsMessage(to, body, buttons));
+    }
+
+    @Override
+    public SendResult sendTemplate(WaAccount from, String to, TemplateMessage t) {
+        return send(from, templateMessage(to, t));
+    }
+
+    // ----- Message bodies in Meta's format (Gupshup's passthrough takes the same ones) -----
+
+    static Map<String, Object> textMessage(String to, String body) {
+        Map<String, Object> msg = base(to, "text");
+        msg.put("text", Map.of("body", clip(body, 4096), "preview_url", false));
+        return msg;
+    }
+
+    static Map<String, Object> buttonsMessage(String to, String body, List<String> buttons) {
         Map<String, Object> interactive = new LinkedHashMap<>();
         interactive.put("body", Map.of("text", clip(body, 1024)));
         if (buttons.size() <= 3) {
@@ -57,11 +72,10 @@ public class MetaCloudApiGateway implements WhatsAppGateway {
         }
         Map<String, Object> msg = base(to, "interactive");
         msg.put("interactive", interactive);
-        return send(from, msg);
+        return msg;
     }
 
-    @Override
-    public SendResult sendTemplate(WaAccount from, String to, TemplateMessage t) {
+    static Map<String, Object> templateMessage(String to, TemplateMessage t) {
         List<Map<String, Object>> components = new ArrayList<>();
         if (t.bodyParams() != null && !t.bodyParams().isEmpty()) {
             List<Map<String, Object>> params = new ArrayList<>();
@@ -78,7 +92,7 @@ public class MetaCloudApiGateway implements WhatsAppGateway {
         if (!components.isEmpty()) template.put("components", components);
         Map<String, Object> msg = base(to, "template");
         msg.put("template", template);
-        return send(from, msg);
+        return msg;
     }
 
     private SendResult send(WaAccount from, Map<String, Object> msg) {
@@ -103,7 +117,7 @@ public class MetaCloudApiGateway implements WhatsAppGateway {
         return m;
     }
 
-    private static String friendly(MetaApiException e) {
+    static String friendly(MetaApiException e) {
         return switch (e.getCode()) {
             case 131047 -> "More than 24 hours since the patient's last message. Only an approved template can be sent.";
             case 132001 -> "The template isn't approved yet (or its name/language doesn't match). " + e.getMessage();
@@ -142,6 +156,14 @@ public class MetaCloudApiGateway implements WhatsAppGateway {
     }
 
     public static WebhookBatch parse(JsonNode root) {
+        return parse(root, false);
+    }
+
+    /**
+     * preferGupshupIds: Gupshup's v3 webhooks are in Meta's format, but delivery updates refer to the
+     * message by Gupshup's id (gs_id), which is what its send API returned to us.
+     */
+    public static WebhookBatch parse(JsonNode root, boolean preferGupshupIds) {
         List<InboundMessage> messages = new ArrayList<>();
         List<StatusUpdate> statuses = new ArrayList<>();
         for (JsonNode entry : root.path("entry")) {
@@ -167,7 +189,8 @@ public class MetaCloudApiGateway implements WhatsAppGateway {
                     if (st == null) continue;
                     String err = s.path("errors").path(0).path("title").asText(null);
                     String detail = s.path("errors").path(0).path("error_data").path("details").asText(null);
-                    statuses.add(new StatusUpdate(s.path("id").asText(), st, detail != null ? err + ": " + detail : err));
+                    String id = preferGupshupIds && s.hasNonNull("gs_id") ? s.path("gs_id").asText() : s.path("id").asText();
+                    statuses.add(new StatusUpdate(id, st, detail != null ? err + ": " + detail : err));
                 }
             }
         }

@@ -79,6 +79,7 @@ public class WhatsAppConnectService {
         }
 
         String display = info.path("display_phone_number").asText(null);
+        c.setGupshupAppId(null); // switching to Meta directly
         c.setWaPhoneNumberId(phoneId);
         c.setWaBusinessAccountId(wabaId);
         c.setWaAccessToken(cipher.encrypt(token));
@@ -116,6 +117,7 @@ public class WhatsAppConnectService {
         c.setWaAppSecret(null);
         c.setWaVerifiedName(null);
         c.setWaConnectedAt(null);
+        c.setGupshupAppId(null);
         c.setWhatsappConnected(false);
     }
 }

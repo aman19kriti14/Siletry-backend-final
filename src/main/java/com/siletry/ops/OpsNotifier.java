@@ -38,6 +38,8 @@ public class OpsNotifier {
     private final GatewayRouter router;
     private final List<String> recipients;
     private final boolean template;
+    private static final long SYSTEM_ALERT_GAP_MS = 10 * 60_000L;
+    private final java.util.concurrent.ConcurrentHashMap<String, Long> lastSystemAlert = new java.util.concurrent.ConcurrentHashMap<>();
 
     public OpsNotifier(OutboundMessageService outbound, GatewayRouter router, OpsProperties props) {
         this.outbound = outbound;
@@ -81,6 +83,34 @@ public class OpsNotifier {
             return new Result(Outcome.SENT, firstId, errors.isEmpty() ? null : String.join("; ", errors));
         }
         return new Result(Outcome.FAILED, null, String.join("; ", errors));
+    }
+
+    /**
+     * Tells the team something broke (bot crash, send failures). The same key alerts at most once
+     * every 10 minutes, so a bug that hits every message doesn't flood anyone's phone. Never throws.
+     */
+    public void systemAlert(String key, String summary) {
+        if (!enabled()) {
+            log.warn("System alert (not sent, alerts not configured): {}", summary);
+            return;
+        }
+        long now = System.currentTimeMillis();
+        Long last = lastSystemAlert.get(key);
+        if (last != null && now - last < SYSTEM_ALERT_GAP_MS) return;
+        lastSystemAlert.put(key, now);
+        String line = summary.replaceAll("\\s+", " ").trim();
+        if (line.length() > 900) line = line.substring(0, 897) + "...";
+        TemplateMessage fallback = TemplateMessage.of(TemplateCatalog.STAFF_ALERT.name(), "Siletry ops", line);
+        for (String to : recipients) {
+            try {
+                SendResult r = template
+                        ? router.adminGateway().sendTemplate(router.adminAccount(), to, fallback)
+                        : outbound.sendAdmin(to, "⚠️ Siletry alert\n\n" + line, List.of(), fallback);
+                if (!r.ok()) log.warn("System alert to {} failed: {}", mask(to), r.error());
+            } catch (Exception e) {
+                log.warn("System alert to {} failed: {}", mask(to), e.getMessage());
+            }
+        }
     }
 
     /** Full alert, sent as a normal message. */

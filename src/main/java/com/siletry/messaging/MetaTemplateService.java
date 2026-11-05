@@ -25,11 +25,14 @@ public class MetaTemplateService {
     private final MetaGraphClient graph;
     private final CredentialCipher cipher;
     private final MessageTemplateRepository templates;
+    private final GupshupTemplateService gupshup;
 
-    public MetaTemplateService(MetaGraphClient graph, CredentialCipher cipher, MessageTemplateRepository templates) {
+    public MetaTemplateService(MetaGraphClient graph, CredentialCipher cipher, MessageTemplateRepository templates,
+                               GupshupTemplateService gupshup) {
         this.graph = graph;
         this.cipher = cipher;
         this.templates = templates;
+        this.gupshup = gupshup;
     }
 
     /** Makes sure every catalog template exists as a row for the clinic (for the Templates page). */
@@ -54,6 +57,7 @@ public class MetaTemplateService {
     public SyncResult submitAll(Clinic c) {
         requireConnected(c);
         seed(c.getId());
+        if (c.isGupshup()) return gupshup.submitAll(c);
         String token = cipher.decrypt(c.getWaAccessToken());
         Map<String, JsonNode> existing = fetch(c, token);
         List<String> errors = new ArrayList<>();
@@ -79,6 +83,7 @@ public class MetaTemplateService {
     public SyncResult sync(Clinic c) {
         requireConnected(c);
         seed(c.getId());
+        if (c.isGupshup()) return gupshup.sync(c);
         String token = cipher.decrypt(c.getWaAccessToken());
         Map<String, JsonNode> remote = fetch(c, token);
         int approved = 0, pending = 0, rejected = 0;
@@ -128,7 +133,7 @@ public class MetaTemplateService {
     }
 
     private static void requireConnected(Clinic c) {
-        if (!c.hasWhatsAppApi() || c.getWaBusinessAccountId() == null) {
+        if (!c.hasWhatsAppApi() || (!c.isGupshup() && c.getWaBusinessAccountId() == null)) {
             throw com.siletry.common.ApiException.badRequest("Connect the clinic's WhatsApp first");
         }
     }

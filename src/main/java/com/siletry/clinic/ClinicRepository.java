@@ -14,6 +14,8 @@ public interface ClinicRepository extends JpaRepository<Clinic, Long> {
 
     Optional<Clinic> findByWaPhoneNumberId(String waPhoneNumberId);
 
+    Optional<Clinic> findByGupshupAppId(String gupshupAppId);
+
     /** Row lock used when handing out per-clinic sequence numbers (patient IDs, tokens). */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select c from Clinic c where c.id = :id")

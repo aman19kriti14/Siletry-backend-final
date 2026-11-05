@@ -127,12 +127,22 @@ public class Clinic {
     @Column(name = "wa_connected_at")
     private LocalDateTime waConnectedAt;
 
+    // ----- Gupshup (partner app). When set, messages go through Gupshup and waAccessToken holds the
+    // encrypted Gupshup app token. waPhoneNumberId, if known, is the Meta phone number ID behind the app.
+    @Column(name = "gupshup_app_id", unique = true)
+    private String gupshupAppId;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
-    /** True when real messages go out through Meta for this clinic. */
+    /** True when real messages go out for this clinic (Meta directly or through Gupshup). */
     public boolean hasWhatsAppApi() {
-        return waPhoneNumberId != null && waAccessToken != null;
+        return (waPhoneNumberId != null || gupshupAppId != null) && waAccessToken != null;
+    }
+
+    /** True when this clinic's WhatsApp runs through a Gupshup partner app. */
+    public boolean isGupshup() {
+        return gupshupAppId != null;
     }
 
     public boolean isLive() {
