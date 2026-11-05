@@ -14,7 +14,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -39,9 +42,14 @@ public class ScheduledJobs {
     private final FollowUpRepository followUps;
     private final BotService bot;
     private final QueueService queue;
+    private final TransactionTemplate tx;
 
     public ScheduledJobs(SlotHoldRepository holds, AppointmentRepository appointments, ClinicRepository clinics,
-                         NotificationService notify, FollowUpRepository followUps, BotService bot, QueueService queue) {
+                         NotificationService notify, FollowUpRepository followUps, BotService bot, QueueService queue,
+                         PlatformTransactionManager txManager) {
+        this.tx = new TransactionTemplate(txManager);
+        // One transaction per reminder: a failure can't roll back (and re-send) the others
+        this.tx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         this.holds = holds;
         this.appointments = appointments;
         this.clinics = clinics;
@@ -60,27 +68,38 @@ public class ScheduledJobs {
 
     /** Evening-before reminders, sent at each clinic's reminder time (default 6 pm). */
     @Scheduled(fixedDelay = 5 * 60_000, initialDelay = 60_000)
-    @Transactional
     public void sendReminders() {
-        runReminders();
+        try {
+            runReminders();
+        } catch (Exception e) {
+            log.warn("Reminder run failed: {}", e.getMessage());
+        }
     }
 
-    @Transactional
     public int runReminders() {
         LocalDate tomorrow = LocalDate.now().plusDays(1);
-        List<Appointment> due = appointments.findNeedingReminder(tomorrow.atStartOfDay(), tomorrow.plusDays(1).atStartOfDay());
+        List<Long> due = tx.execute(s -> appointments
+                .findNeedingReminder(tomorrow.atStartOfDay(), tomorrow.plusDays(1).atStartOfDay())
+                .stream().map(Appointment::getId).toList());
         Map<Long, Clinic> clinicCache = new HashMap<>();
         LocalTime now = LocalTime.now();
         int sent = 0;
-        for (Appointment a : due) {
-            Clinic c = clinicCache.computeIfAbsent(a.getClinicId(), id -> clinics.findById(id).orElse(null));
-            if (c == null || !c.isRemindersEnabled() || now.isBefore(c.getReminderTime())) continue;
+        for (Long id : due) {
             try {
-                notify.reminder(a);
-                a.setReminderSentAt(LocalDateTime.now());
-                sent++;
+                Boolean ok = tx.execute(s -> {
+                    Appointment a = appointments.findById(id).orElse(null);
+                    if (a == null || a.getReminderSentAt() != null) return false; // already done
+                    Clinic c = clinicCache.computeIfAbsent(a.getClinicId(), cid -> clinics.findById(cid).orElse(null));
+                    if (c == null || !c.isRemindersEnabled() || now.isBefore(c.getReminderTime())) return false;
+                    // Mark first: if the send then throws, the row rolls back and is retried next run,
+                    // but a send that went out is never repeated by a later failure elsewhere
+                    a.setReminderSentAt(LocalDateTime.now());
+                    notify.reminder(a);
+                    return true;
+                });
+                if (Boolean.TRUE.equals(ok)) sent++;
             } catch (Exception e) {
-                log.warn("Reminder failed for appointment {}: {}", a.getId(), e.getMessage());
+                log.warn("Reminder failed for appointment {}: {}", id, e.getMessage());
             }
         }
         if (sent > 0) log.info("Sent {} reminders", sent);
@@ -89,27 +108,49 @@ public class ScheduledJobs {
 
     /** Follow-ups due today: message the patient with two open slots. Runs 9 am to 7 pm. */
     @Scheduled(fixedDelay = 15 * 60_000, initialDelay = 90_000)
-    @Transactional
     public void sendFollowUps() {
         LocalTime now = LocalTime.now();
         if (now.isBefore(LocalTime.of(9, 0)) || now.isAfter(LocalTime.of(19, 0))) return;
-        runFollowUps();
+        try {
+            runFollowUps();
+        } catch (Exception e) {
+            log.warn("Follow-up run failed: {}", e.getMessage());
+        }
     }
 
-    @Transactional
     public int runFollowUps() {
         LocalDate today = LocalDate.now();
+        List<Long> due = tx.execute(s -> followUps.findToNotify(today, today.minusDays(3))
+                .stream().map(FollowUp::getId).toList());
         int sent = 0;
-        for (FollowUp f : followUps.findToNotify(today, today.minusDays(3))) {
+        for (Long id : due) {
             try {
-                if (bot.offerFollowUp(f)) sent++;
-                else f.setNotifiedAt(LocalDateTime.now()); // don't retry every 15 minutes
+                Boolean ok = tx.execute(s -> {
+                    FollowUp f = followUps.findById(id).orElse(null);
+                    if (f == null || f.getNotifiedAt() != null) return false;
+                    if (bot.offerFollowUp(f)) return true;
+                    f.setNotifiedAt(LocalDateTime.now()); // don't retry every 15 minutes
+                    return false;
+                });
+                if (Boolean.TRUE.equals(ok)) sent++;
             } catch (Exception e) {
-                log.warn("Follow-up {} failed: {}", f.getId(), e.getMessage());
+                log.warn("Follow-up {} failed: {}", id, e.getMessage());
+                markFollowUpTried(id);
             }
         }
         if (sent > 0) log.info("Sent {} follow-up offers", sent);
         return sent;
+    }
+
+    /** A follow-up that throws is not retried every 15 minutes. */
+    private void markFollowUpTried(Long id) {
+        try {
+            tx.executeWithoutResult(s -> followUps.findById(id).ifPresent(f -> {
+                if (f.getNotifiedAt() == null) f.setNotifiedAt(LocalDateTime.now());
+            }));
+        } catch (Exception ignored) {
+            // logged above
+        }
     }
 
     /** Nudge when nobody has tapped "Call next" for twice the average consult time. */
