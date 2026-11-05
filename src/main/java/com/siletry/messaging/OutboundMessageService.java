@@ -146,7 +146,9 @@ public class OutboundMessageService {
     /** Login codes: always the AUTHENTICATION template on the real number (the owner usually hasn't messaged us). */
     public SendResult sendLoginCode(String toPhone, String code, String fallbackText) {
         WhatsAppGateway g = router.adminGateway();
-        if (!router.adminIsReal() || router.isSimulating()) return g.sendText(null, toPhone, fallbackText);
+        if (router.isSimulating()) return g.sendText(null, toPhone, fallbackText);
+        // No real Siletry number: say so, instead of "sending" into the mock and leaving the person waiting
+        if (!router.adminIsReal()) return SendResult.failed("Siletry's WhatsApp number isn't set up");
         SendResult r = g.sendTemplate(router.adminAccount(), toPhone,
                 new TemplateMessage(TemplateCatalog.LOGIN_CODE, "en", List.of(code), code));
         if (!r.ok()) r = g.sendText(router.adminAccount(), toPhone, fallbackText);
