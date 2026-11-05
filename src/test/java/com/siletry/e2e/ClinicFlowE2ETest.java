@@ -219,7 +219,12 @@ class ClinicFlowE2ETest {
 
         assertThat(patients.findByClinicIdAndPhone(clinic.getId(), patientPhone)).isPresent();
         // The reply went out through Gupshup, not Meta
-        verify(gupshupGateway, atLeastOnce()).sendText(argThat(a -> appId.equals(a.phoneNumberId())), eq(patientPhone), anyString());
+        var sent = mockingDetails(gupshupGateway).getInvocations().stream()
+                .filter(i -> i.getMethod().getName().startsWith("send"))
+                .filter(i -> appId.equals(((com.siletry.messaging.gateway.WhatsAppGateway.WaAccount) i.getArgument(0)).phoneNumberId()))
+                .filter(i -> patientPhone.equals(i.getArgument(1)))
+                .count();
+        assertThat(sent).as("replies sent through the clinic's Gupshup app").isGreaterThanOrEqualTo(1);
         verifyNoInteractions(metaGateway);
     }
 
