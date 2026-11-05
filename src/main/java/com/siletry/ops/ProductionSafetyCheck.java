@@ -13,8 +13,8 @@ import java.util.List;
  * Refuses to start in production with unsafe settings: a public JWT secret would let anyone
  * forge a login, and dev tools would show login codes on screen.
  *
- * Production = SILETRY_ENV=production, or Railway's environment named "production".
- * If a deploy fails here, Railway keeps the previous deployment running.
+ * Production = SILETRY_ENV=production, Railway's environment named "production", or running on Render
+ * (unless SILETRY_ENV says otherwise). If a deploy fails here, the host keeps the previous deployment running.
  */
 @Component
 public class ProductionSafetyCheck {
@@ -31,6 +31,7 @@ public class ProductionSafetyCheck {
     private final String allowedOrigins;
 
     public ProductionSafetyCheck(@Value("${siletry.env}") String env,
+                                 @Value("${siletry.on-render:false}") boolean onRender,
                                  @Value("${siletry.jwt.secret}") String jwtSecret,
                                  @Value("${siletry.credentials-key}") String credentialsKey,
                                  @Value("${siletry.dev-tools}") boolean devTools,
@@ -38,7 +39,8 @@ public class ProductionSafetyCheck {
                                  @Value("${siletry.ops.leads.ip-hash-salt}") String ipSalt,
                                  @Value("${siletry.meta.verify-token}") String verifyToken,
                                  @Value("${siletry.cors.allowed-origins}") String allowedOrigins) {
-        this.env = env;
+        // Render: production unless SILETRY_ENV was set to something explicit
+        this.env = onRender && (env == null || env.isBlank() || "local".equals(env)) ? "production" : env;
         this.jwtSecret = jwtSecret;
         this.credentialsKey = credentialsKey;
         this.devTools = devTools;
